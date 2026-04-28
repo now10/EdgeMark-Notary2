@@ -1,0 +1,72 @@
+name: macOS Sign and Notarize
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-notarize:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Apple Certificate
+        env:
+          CERT_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: "temporary_password"
+        run: |
+          # 1. Create temporary variables for paths
+          CERT_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # 2. Decode the certificate from secrets
+          echo -n "$CERT_BASE64" | base64 --decode -o $CERT_PATH
+
+          # 3. Create a temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # 4. Import the certificate into the keychain
+          security import $CERT_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Code Sign the App
+        run: |
+          # Replace 'EdgeMark.app' with your folder name
+          # Replace 'Developer ID Application: Your Name (TeamID)' with your exact cert name
+          codesign --deep --force --options runtime --sign "Developer ID Application: Your Name (TEAMID)" "EdgeMark.app"
+
+      - name: Create ZIP and Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.AC_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent "EdgeMark.app" "EdgeMark.zip"
+          
+          xcrun notarytool submit EdgeMark.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$TEAM_ID" \
+            --wait
+
+      - name: Staple Ticket
+        run: xcrun stapler staple "EdgeMark.app"
+
+      - name: Upload Finished App
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fully-Signed-EdgeMark
+          path: EdgeMark.app
+
+
+
+
+
+
+
+
